@@ -1,12 +1,10 @@
-class Knv < Formula
+class KnvAT00 < Formula
   desc "Keyboard-driven terminal UI for monitoring and operating Kubernetes nodes"
   homepage "https://github.com/kl2-in/nodeviewer"
   url "https://github.com/kl2-in/nodeviewer/archive/refs/tags/v0.0.3.tar.gz"
   sha256 "f717d835ca0fb5703a8a9a73b2f26cf54e108a7be7af5428e790fd35a6fa777a"
   license "MIT"
   version "0.0.3"
-
-  head "https://github.com/kl2-in/nodeviewer.git", branch: "main"
 
   depends_on "go" => :build
 
