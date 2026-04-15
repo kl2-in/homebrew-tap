@@ -9,17 +9,15 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   sync-homebrew:
     name: Update Homebrew Tap Formulas
     runs-on: ubuntu-latest
-    if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
 
     env:
-      SOURCE_REPO: ${{ github.repository }}
-      TAP_REPO: ${{ github.repository_owner }}/homebrew-tap
+      SOURCE_REPO: kl2-in/nodeviewer
 
     steps:
       - name: Resolve tag
@@ -64,9 +62,7 @@ jobs:
       - name: Checkout tap repository
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.TAP_REPO }}
-          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
-          path: tap
+          fetch-depth: 0
 
       - name: Generate latest and versioned formulas
         shell: bash
@@ -84,9 +80,9 @@ jobs:
 
           CLASS_VERSIONED="KnvAT${MAJOR}${MINOR}"
 
-          mkdir -p tap/Formula
+          mkdir -p Formula
 
-          cat > tap/Formula/knv.rb <<EOF
+          cat > Formula/knv.rb <<EOF
           class Knv < Formula
             desc "Keyboard-driven terminal UI for monitoring and operating Kubernetes nodes"
             homepage "https://github.com/${SOURCE_REPO}"
@@ -110,7 +106,7 @@ jobs:
           end
           EOF
 
-          cat > "tap/Formula/knv@${MAJOR_MINOR}.rb" <<EOF
+          cat > "Formula/knv@${MAJOR_MINOR}.rb" <<EOF
           class ${CLASS_VERSIONED} < Formula
             desc "Keyboard-driven terminal UI for monitoring and operating Kubernetes nodes"
             homepage "https://github.com/${SOURCE_REPO}"
@@ -133,7 +129,6 @@ jobs:
           EOF
 
       - name: Commit and push updates
-        working-directory: tap
         shell: bash
         run: |
           set -euo pipefail
