@@ -1,0 +1,101 @@
+name: Sync knv Formula From Source Repo
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Optional tag to sync (example: v0.0.1). Leave empty to use latest v* tag."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPO: kl2-in/nodeviewer
+
+    steps:
+      - name: Checkout tap repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          INPUT_TAG="${{ inputs.tag }}"
+          if [[ -n "${INPUT_TAG}" ]]; then
+            TAG="${INPUT_TAG}"
+          else
+            TAG=$(git ls-remote --tags --refs "https://github.com/${SOURCE_REPO}.git" "v*" \
+              | awk -F/ '{print $3}' \
+              | sort -V \
+              | tail -n1)
+          fi
+
+          if [[ -z "${TAG}" ]]; then
+            echo "No release tag found in ${SOURCE_REPO}"
+            exit 1
+          fi
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Using tag: ${TAG}"
+
+      - name: Generate Formula/knv.rb
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${{ steps.tag.outputs.tag }}"
+          VERSION="${TAG#v}"
+          SRC_URL="https://github.com/${SOURCE_REPO}/archive/refs/tags/${TAG}.tar.gz"
+
+          curl -fsSL "${SRC_URL}" -o source.tar.gz
+          SRC_SHA=$(sha256sum source.tar.gz | awk '{print $1}')
+
+          mkdir -p Formula
+          cat > Formula/knv.rb <<EOF
+          class Knv < Formula
+            desc "Keyboard-driven terminal UI for monitoring and operating Kubernetes nodes"
+            homepage "https://github.com/${SOURCE_REPO}"
+            url "${SRC_URL}"
+            sha256 "${SRC_SHA}"
+            license "MIT"
+            version "${VERSION}"
+
+            head "https://github.com/${SOURCE_REPO}.git", branch: "main"
+
+            depends_on "go" => :build
+
+            def install
+              ldflags = "-s -w -X main.version=v#{version}"
+              system "go", "build", "-trimpath", "-ldflags", ldflags, "-o", bin/"knv", "."
+            end
+
+            test do
+              assert_match "knv", shell_output("#{bin}/knv -version")
+            end
+          end
+          EOF
+
+      - name: Commit and push if changed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/knv.rb
+          git commit -m "knv: update formula to ${{ steps.tag.outputs.tag }}"
+          git push
