@@ -1,28 +1,27 @@
-name: Sync knv Formula From Source Repo
+name: Sync Homebrew Tap
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Optional tag to sync (example: v0.0.1). Leave empty to use latest v* tag."
+        description: "Optional tag to sync (example: v0.1.2). Leave empty to use latest v* tag."
         required: false
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  sync:
+  sync-homebrew:
+    name: Update Homebrew Tap Formulas
     runs-on: ubuntu-latest
+    if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+
     env:
-      SOURCE_REPO: kl2-in/nodeviewer
+      SOURCE_REPO: ${{ github.repository }}
+      TAP_REPO: ${{ github.repository_owner }}/homebrew-tap
 
     steps:
-      - name: Checkout tap repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Resolve tag
         id: tag
         shell: bash
@@ -40,27 +39,54 @@ jobs:
           fi
 
           if [[ -z "${TAG}" ]]; then
-            echo "No release tag found in ${SOURCE_REPO}"
+            echo "No release tags found in ${SOURCE_REPO}" >&2
             exit 1
           fi
 
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Using tag: ${TAG}"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Generate Formula/knv.rb
+      - name: Compute source hash
+        id: src
         shell: bash
         run: |
           set -euo pipefail
 
           TAG="${{ steps.tag.outputs.tag }}"
-          VERSION="${TAG#v}"
           SRC_URL="https://github.com/${SOURCE_REPO}/archive/refs/tags/${TAG}.tar.gz"
 
           curl -fsSL "${SRC_URL}" -o source.tar.gz
           SRC_SHA=$(sha256sum source.tar.gz | awk '{print $1}')
 
-          mkdir -p Formula
-          cat > Formula/knv.rb <<EOF
+          echo "url=${SRC_URL}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SRC_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout tap repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TAP_REPO }}
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          path: tap
+
+      - name: Generate latest and versioned formulas
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${{ steps.tag.outputs.tag }}"
+          VERSION="${{ steps.tag.outputs.version }}"
+          SRC_URL="${{ steps.src.outputs.url }}"
+          SRC_SHA="${{ steps.src.outputs.sha }}"
+
+          MAJOR=$(echo "${VERSION}" | cut -d. -f1)
+          MINOR=$(echo "${VERSION}" | cut -d. -f2)
+          MAJOR_MINOR="${MAJOR}.${MINOR}"
+
+          CLASS_VERSIONED="KnvAT${MAJOR}${MINOR}"
+
+          mkdir -p tap/Formula
+
+          cat > tap/Formula/knv.rb <<EOF
           class Knv < Formula
             desc "Keyboard-driven terminal UI for monitoring and operating Kubernetes nodes"
             homepage "https://github.com/${SOURCE_REPO}"
@@ -84,18 +110,41 @@ jobs:
           end
           EOF
 
-      - name: Commit and push if changed
+          cat > "tap/Formula/knv@${MAJOR_MINOR}.rb" <<EOF
+          class ${CLASS_VERSIONED} < Formula
+            desc "Keyboard-driven terminal UI for monitoring and operating Kubernetes nodes"
+            homepage "https://github.com/${SOURCE_REPO}"
+            url "${SRC_URL}"
+            sha256 "${SRC_SHA}"
+            license "MIT"
+            version "${VERSION}"
+
+            depends_on "go" => :build
+
+            def install
+              ldflags = "-s -w -X main.version=v#{version}"
+              system "go", "build", "-trimpath", "-ldflags", ldflags, "-o", bin/"knv", "."
+            end
+
+            test do
+              assert_match "knv", shell_output("#{bin}/knv -version")
+            end
+          end
+          EOF
+
+      - name: Commit and push updates
+        working-directory: tap
         shell: bash
         run: |
           set -euo pipefail
 
           if git diff --quiet; then
-            echo "No changes to commit"
+            echo "No Homebrew formula changes"
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/knv.rb
-          git commit -m "knv: update formula to ${{ steps.tag.outputs.tag }}"
+          git add Formula/knv.rb Formula/knv@*.rb
+          git commit -m "knv: sync formulas for ${{ steps.tag.outputs.tag }}"
           git push
